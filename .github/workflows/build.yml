@@ -109,11 +109,9 @@ jobs:
           build_ffmpeg() {
             ARCH="$1"
             PREFIX="$2"
-            HOST_TRIPLE="$3"
-            HOST_CXX="$4"
             mkdir -p "build-$ARCH"
             pushd "build-$ARCH"
-            CONFIGURE_CMD=("../$SRC_DIR/configure" \
+            "../$SRC_DIR/configure" \
               --prefix="$PREFIX" \
               --enable-shared \
               --disable-static \
@@ -121,20 +119,17 @@ jobs:
               --disable-programs \
               --target-os=darwin \
               --arch="$ARCH" \
-              --host="$HOST_TRIPLE" \
               --cc="$(xcrun --find clang)" \
-              --cxx="$HOST_CXX" \
+              --cxx="$(xcrun --find clang++)" \
               --extra-cflags="-arch $ARCH -isysroot $SDK_PATH -mmacosx-version-min=${MACOSX_DEPLOYMENT_TARGET}" \
-              --extra-ldflags="-arch $ARCH -isysroot $SDK_PATH -mmacosx-version-min=${MACOSX_DEPLOYMENT_TARGET}" \
-              --pkg-config-flags="--define-prefix")
-            "${CONFIGURE_CMD[@]}"
+              --extra-ldflags="-arch $ARCH -isysroot $SDK_PATH -mmacosx-version-min=${MACOSX_DEPLOYMENT_TARGET}"
             make -j"$(sysctl -n hw.ncpu)"
             make install
             popd
           }
 
-          build_ffmpeg arm64 "$PWD/ffmpeg-install-arm64" aarch64-apple-darwin "$(xcrun --find clang++)"
-          build_ffmpeg x86_64 "$PWD/ffmpeg-install-x86_64" x86_64-apple-darwin "$(xcrun --find clang++)"
+          build_ffmpeg arm64 "$PWD/ffmpeg-install-arm64"
+          build_ffmpeg x86_64 "$PWD/ffmpeg-install-x86_64"
 
           mkdir -p third_party/ffmpeg/macos/include third_party/ffmpeg/macos/lib
           rsync -a ffmpeg-install-arm64/include/ third_party/ffmpeg/macos/include/
