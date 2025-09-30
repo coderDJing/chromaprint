@@ -71,18 +71,56 @@
   - `chromaprint-1.6.0-custom-macos-universal.tar.gz`（内含 `libchromaprint.dylib` 等）。
 
 ### 7. 在主项目集成
-- 下载上一步发布的压缩包，解压后分别放置：
-  - `rust_package/libs/win32-x64-msvc/{chromaprint.dll, chromaprint.lib}`
-  - `rust_package/libs/darwin-universal/{libchromaprint.dylib}`
-- 更新 `rust_package/build.rs`：
-  ```rust
-  #[cfg(target_os = "windows")]
-  println!("cargo:rustc-link-search=native=./libs/win32-x64-msvc");
 
-  #[cfg(target_os = "macos")]
-  println!("cargo:rustc-link-search=native=./libs/darwin-universal");
-  ```
-- 重新执行 `napi build --platform --release` 生成 `.node` 文件。
+#### 7.1 下载预编译包
+从 GitHub Release 下载对应平台的压缩包并解压。
+
+#### 7.2 放置库文件
+**Windows (win64)**:
+```
+rust_package/libs/win32-x64-msvc/
+├── chromaprint.dll
+├── chromaprint.lib
+└── FFmpeg DLL 文件（关键！）：
+    ├── avcodec-*.dll
+    ├── avformat-*.dll
+    ├── avutil-*.dll
+    ├── swresample-*.dll
+    └── ... (其他依赖 DLL)
+```
+
+**macOS (Universal)**:
+```
+rust_package/libs/darwin-universal/
+├── libchromaprint.dylib
+└── FFmpeg dylib 文件（关键！）：
+    ├── libavcodec.*.dylib
+    ├── libavformat.*.dylib
+    ├── libavutil.*.dylib
+    ├── libswresample.*.dylib
+    └── ... (其他依赖 dylib)
+```
+
+#### 7.3 更新 build.rs
+```rust
+#[cfg(target_os = "windows")]
+println!("cargo:rustc-link-search=native=./libs/win32-x64-msvc");
+
+#[cfg(target_os = "macos")]
+println!("cargo:rustc-link-search=native=./libs/darwin-universal");
+```
+
+#### 7.4 编译并分发
+- 执行 `napi build --platform --release` 生成 `.node` 文件
+- **重要**：在 Electron 打包时，确保将 FFmpeg 运行时库一起打包：
+  - Windows: 把所有 DLL 放到 `.node` 文件同目录或添加到 PATH
+  - macOS: 把所有 dylib 放到 `.node` 文件同目录或设置 `DYLD_LIBRARY_PATH`
+
+#### 7.5 排查运行时错误
+如果遇到 "module could not be found" 错误：
+1. 检查 FFmpeg 运行时库（DLL/dylib）是否存在
+2. Windows: 使用 [Dependencies](https://github.com/lucasg/Dependencies) 工具检查缺失的 DLL
+3. macOS: 使用 `otool -L <dylib>` 查看依赖关系
 
 ## 注意事项
 - FFmpeg SDK 安装位置需在 Actions 中提前准备，可上传到仓库或外部下载。若考虑版权/体积，可换成 KissFFT。

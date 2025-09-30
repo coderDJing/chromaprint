@@ -89,6 +89,8 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Path artifacts -Force | Out-Null
+          
+          # 复制 chromaprint 产物
           if (Test-Path install\bin\chromaprint.dll) {
             Copy-Item install\bin\chromaprint.dll artifacts\chromaprint.dll -Force
           }
@@ -98,6 +100,19 @@ jobs:
           if (Test-Path install\bin\chromaprint.pdb) {
             Copy-Item install\bin\chromaprint.pdb artifacts\chromaprint.pdb -Force
           }
+          
+          # 复制 FFmpeg 运行时 DLL（关键！）
+          $ffmpegBin = "third_party\ffmpeg\win64\bin"
+          if (Test-Path $ffmpegBin) {
+            Write-Host "复制 FFmpeg 运行时 DLL..."
+            Get-ChildItem $ffmpegBin -Filter *.dll | ForEach-Object {
+              Copy-Item $_.FullName "artifacts\" -Force
+              Write-Host "  已复制: $($_.Name)"
+            }
+          }
+          
+          Write-Host "`n最终产物列表:"
+          Get-ChildItem artifacts | Select-Object Name, Length
 
       - name: 上传 Windows 构建
         uses: actions/upload-artifact@v4
@@ -151,10 +166,27 @@ jobs:
       - name: 打包产物
         run: |
           mkdir -p artifacts
+          
+          # 复制 chromaprint 库
           if [ -f install/lib/libchromaprint.dylib ]; then 
             cp install/lib/libchromaprint.dylib artifacts/libchromaprint.dylib
             file artifacts/libchromaprint.dylib
           fi
+          
+          # 复制 FFmpeg 运行时 dylib（关键！）
+          echo -e "\n复制 FFmpeg 运行时 dylib..."
+          FFMPEG_LIB="third_party/ffmpeg/macos/lib"
+          if [ -d "$FFMPEG_LIB" ]; then
+            for lib in "$FFMPEG_LIB"/*.dylib; do
+              if [ -f "$lib" ]; then
+                cp "$lib" artifacts/
+                echo "  已复制: $(basename $lib)"
+              fi
+            done
+          fi
+          
+          echo -e "\n最终产物列表:"
+          ls -lh artifacts/
 
       - name: 上传 macOS arm64 构建
         uses: actions/upload-artifact@v4
@@ -208,10 +240,27 @@ jobs:
       - name: 打包产物
         run: |
           mkdir -p artifacts
+          
+          # 复制 chromaprint 库
           if [ -f install/lib/libchromaprint.dylib ]; then 
             cp install/lib/libchromaprint.dylib artifacts/libchromaprint.dylib
             file artifacts/libchromaprint.dylib
           fi
+          
+          # 复制 FFmpeg 运行时 dylib（关键！）
+          echo -e "\n复制 FFmpeg 运行时 dylib..."
+          FFMPEG_LIB="third_party/ffmpeg/macos/lib"
+          if [ -d "$FFMPEG_LIB" ]; then
+            for lib in "$FFMPEG_LIB"/*.dylib; do
+              if [ -f "$lib" ]; then
+                cp "$lib" artifacts/
+                echo "  已复制: $(basename $lib)"
+              fi
+            done
+          fi
+          
+          echo -e "\n最终产物列表:"
+          ls -lh artifacts/
 
       - name: 上传 macOS x86_64 构建
         uses: actions/upload-artifact@v4
@@ -240,9 +289,38 @@ jobs:
       - name: 创建 Universal Binary
         run: |
           mkdir -p artifacts
+          
+          # 合并 chromaprint
           lipo -create arm64/libchromaprint.dylib x86_64/libchromaprint.dylib -output artifacts/libchromaprint.dylib
           lipo -info artifacts/libchromaprint.dylib
           file artifacts/libchromaprint.dylib
+          
+          # 合并 FFmpeg 运行时库（关键！）
+          echo -e "\n合并 FFmpeg 运行时 dylib..."
+          for arm_lib in arm64/*.dylib; do
+            lib_name=$(basename "$arm_lib")
+            # 跳过 chromaprint
+            if [ "$lib_name" = "libchromaprint.dylib" ]; then
+              continue
+            fi
+            
+            x64_lib="x86_64/$lib_name"
+            if [ -f "$x64_lib" ]; then
+              echo "  合并: $lib_name"
+              lipo -create "$arm_lib" "$x64_lib" -output "artifacts/$lib_name"
+              lipo -info "artifacts/$lib_name"
+            else
+              echo "  警告: $lib_name 只有 arm64 版本，直接复制"
+              cp "$arm_lib" "artifacts/$lib_name"
+            fi
+          done
+          
+          echo -e "\n最终 Universal 产物列表:"
+          ls -lh artifacts/
+          echo -e "\n验证架构:"
+          for lib in artifacts/*.dylib; do
+            echo "$(basename $lib): $(lipo -info $lib | cut -d: -f3)"
+          done
 
       - name: 上传 macOS Universal 构建
         uses: actions/upload-artifact@v4
