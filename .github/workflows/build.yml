@@ -47,13 +47,29 @@ jobs:
             Copy-Item $_.FullName "third_party/ffmpeg/win64/bin/" -Force
           }
 
+      - name: 验证 FFmpeg SDK 结构
+        shell: pwsh
+        run: |
+          Write-Host "检查 FFmpeg SDK 目录结构..."
+          Get-ChildItem -Recurse third_party\ffmpeg\win64 | Select-Object FullName
+          
       - name: 配置 FFmpeg 路径
         shell: pwsh
-        run: echo "FFMPEG_ROOT=${{ github.workspace }}\third_party\ffmpeg\win64" >> $Env:GITHUB_ENV
+        run: |
+          $ffmpegRoot = "${{ github.workspace }}\third_party\ffmpeg\win64"
+          echo "FFMPEG_ROOT=$ffmpegRoot" >> $Env:GITHUB_ENV
+          echo "FFmpeg_ROOT=$ffmpegRoot" >> $Env:GITHUB_ENV
 
       - name: CMake Configure
         shell: pwsh
-        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=OFF -DBUILD_TOOLS=OFF -DFFT_LIB=ffmpeg
+        run: |
+          $ffmpegRoot = "${{ github.workspace }}\third_party\ffmpeg\win64"
+          cmake -S . -B build -G "Visual Studio 17 2022" -A x64 `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DBUILD_TESTS=OFF `
+            -DBUILD_TOOLS=OFF `
+            -DFFT_LIB=ffmpeg `
+            -DFFMPEG_ROOT="$ffmpegRoot"
 
       - name: CMake Build
         shell: pwsh
@@ -83,70 +99,27 @@ jobs:
           name: chromaprint-windows-x64
           path: artifacts
 
-  build-macos:
+  build-macos-arm64:
     runs-on: macos-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: 准备构建依赖
+      - name: 安装并准备 FFmpeg SDK (macOS arm64)
         run: |
           set -euo pipefail
-          brew update
-          brew install nasm pkg-config yasm
-
-      - name: 构建 FFmpeg SDK (macOS Universal)
-        run: |
-          set -euo pipefail
-          VERSION="${FFMPEG_VERSION}"
-          SRC_TAR="ffmpeg-${VERSION}.tar.bz2"
-          curl -L -o "$SRC_TAR" "https://ffmpeg.org/releases/$SRC_TAR"
-          tar xf "$SRC_TAR"
-          SRC_DIR="ffmpeg-${VERSION}"
-          SDK_PATH="$(xcrun --sdk macosx --show-sdk-path)"
-          export MACOSX_DEPLOYMENT_TARGET=11.0
-
-          build_ffmpeg() {
-            ARCH="$1"
-            PREFIX="$2"
-            mkdir -p "build-$ARCH"
-            pushd "build-$ARCH"
-            "../$SRC_DIR/configure" \
-              --prefix="$PREFIX" \
-              --enable-shared \
-              --disable-static \
-              --disable-doc \
-              --disable-programs \
-              --target-os=darwin \
-              --arch="$ARCH" \
-              --cc="$(xcrun --find clang)" \
-              --cxx="$(xcrun --find clang++)" \
-              --extra-cflags="-arch $ARCH -isysroot $SDK_PATH -mmacosx-version-min=${MACOSX_DEPLOYMENT_TARGET}" \
-              --extra-ldflags="-arch $ARCH -isysroot $SDK_PATH -mmacosx-version-min=${MACOSX_DEPLOYMENT_TARGET}"
-            make -j"$(sysctl -n hw.ncpu)"
-            make install
-            popd
-          }
-
-          build_ffmpeg arm64 "$PWD/ffmpeg-install-arm64"
-          build_ffmpeg x86_64 "$PWD/ffmpeg-install-x86_64"
-
+          brew install ffmpeg
+          FFMPEG_PREFIX=$(brew --prefix ffmpeg)
           mkdir -p third_party/ffmpeg/macos/include third_party/ffmpeg/macos/lib
-          rsync -a ffmpeg-install-arm64/include/ third_party/ffmpeg/macos/include/
-
-          for lib in libavcodec libavformat libavutil libswresample libswscale; do
-            lipo -create \
-              "ffmpeg-install-arm64/lib/${lib}.dylib" \
-              "ffmpeg-install-x86_64/lib/${lib}.dylib" \
-              -output "third_party/ffmpeg/macos/lib/${lib}.dylib"
+          rsync -a "$FFMPEG_PREFIX/include/" third_party/ffmpeg/macos/include/
+          for lib in libavcodec libavformat libavutil libswresample libswscale libavfilter libavdevice; do
+            cp "$FFMPEG_PREFIX/lib/${lib}"*.dylib third_party/ffmpeg/macos/lib/ 2>/dev/null || true
           done
           chmod 755 third_party/ffmpeg/macos/lib/*.dylib
-
-      - name: 配置 FFmpeg 路径
-        run: echo "FFMPEG_ROOT=${{ github.workspace }}/third_party/ffmpeg/macos" >> $GITHUB_ENV
+          file third_party/ffmpeg/macos/lib/libavcodec*.dylib | head -1
 
       - name: CMake Configure
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=OFF -DBUILD_TOOLS=OFF -DFFT_LIB=ffmpeg -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=OFF -DBUILD_TOOLS=OFF -DFFT_LIB=ffmpeg -DCMAKE_OSX_ARCHITECTURES="arm64" -DFFMPEG_ROOT="${{ github.workspace }}/third_party/ffmpeg/macos"
 
       - name: CMake Build
         run: cmake --build build --config Release --target chromaprint
@@ -157,10 +130,85 @@ jobs:
       - name: 打包产物
         run: |
           mkdir -p artifacts
-          if [ -f install/lib/libchromaprint.dylib ]; then cp install/lib/libchromaprint.dylib artifacts/; fi
-          if [ -f install/lib/libchromaprint.a ]; then cp install/lib/libchromaprint.a artifacts/; fi
+          if [ -f install/lib/libchromaprint.dylib ]; then 
+            cp install/lib/libchromaprint.dylib artifacts/libchromaprint.dylib
+            file artifacts/libchromaprint.dylib
+          fi
 
-      - name: 上传 macOS 构建
+      - name: 上传 macOS arm64 构建
+        uses: actions/upload-artifact@v4
+        with:
+          name: chromaprint-macos-arm64
+          path: artifacts
+
+  build-macos-x86_64:
+    runs-on: macos-13
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: 安装并准备 FFmpeg SDK (macOS x86_64)
+        run: |
+          set -euo pipefail
+          brew install ffmpeg
+          FFMPEG_PREFIX=$(brew --prefix ffmpeg)
+          mkdir -p third_party/ffmpeg/macos/include third_party/ffmpeg/macos/lib
+          rsync -a "$FFMPEG_PREFIX/include/" third_party/ffmpeg/macos/include/
+          for lib in libavcodec libavformat libavutil libswresample libswscale libavfilter libavdevice; do
+            cp "$FFMPEG_PREFIX/lib/${lib}"*.dylib third_party/ffmpeg/macos/lib/ 2>/dev/null || true
+          done
+          chmod 755 third_party/ffmpeg/macos/lib/*.dylib
+          file third_party/ffmpeg/macos/lib/libavcodec*.dylib | head -1
+
+      - name: CMake Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=OFF -DBUILD_TOOLS=OFF -DFFT_LIB=ffmpeg -DCMAKE_OSX_ARCHITECTURES="x86_64" -DFFMPEG_ROOT="${{ github.workspace }}/third_party/ffmpeg/macos"
+
+      - name: CMake Build
+        run: cmake --build build --config Release --target chromaprint
+
+      - name: CMake Install
+        run: cmake --install build --config Release --prefix "${{ github.workspace }}/install"
+
+      - name: 打包产物
+        run: |
+          mkdir -p artifacts
+          if [ -f install/lib/libchromaprint.dylib ]; then 
+            cp install/lib/libchromaprint.dylib artifacts/libchromaprint.dylib
+            file artifacts/libchromaprint.dylib
+          fi
+
+      - name: 上传 macOS x86_64 构建
+        uses: actions/upload-artifact@v4
+        with:
+          name: chromaprint-macos-x86_64
+          path: artifacts
+
+  build-macos-universal:
+    runs-on: macos-latest
+    needs:
+      - build-macos-arm64
+      - build-macos-x86_64
+    steps:
+      - name: 下载 arm64 构建
+        uses: actions/download-artifact@v4
+        with:
+          name: chromaprint-macos-arm64
+          path: arm64
+
+      - name: 下载 x86_64 构建
+        uses: actions/download-artifact@v4
+        with:
+          name: chromaprint-macos-x86_64
+          path: x86_64
+
+      - name: 创建 Universal Binary
+        run: |
+          mkdir -p artifacts
+          lipo -create arm64/libchromaprint.dylib x86_64/libchromaprint.dylib -output artifacts/libchromaprint.dylib
+          lipo -info artifacts/libchromaprint.dylib
+          file artifacts/libchromaprint.dylib
+
+      - name: 上传 macOS Universal 构建
         uses: actions/upload-artifact@v4
         with:
           name: chromaprint-macos-universal
@@ -171,7 +219,7 @@ jobs:
     runs-on: ubuntu-latest
     needs:
       - build-windows
-      - build-macos
+      - build-macos-universal
     if: startsWith(github.ref, 'refs/tags/')
     steps:
       - name: Checkout
