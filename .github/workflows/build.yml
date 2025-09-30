@@ -51,7 +51,13 @@ jobs:
         shell: pwsh
         run: |
           Write-Host "检查 FFmpeg SDK 目录结构..."
-          Get-ChildItem -Recurse third_party\ffmpeg\win64 | Select-Object FullName
+          Write-Host "`n=== Include 目录 ==="
+          Get-ChildItem third_party\ffmpeg\win64\include -Recurse -File | Select-Object -First 20 FullName
+          Write-Host "`n=== Lib 目录 ==="
+          Get-ChildItem third_party\ffmpeg\win64\lib | Select-Object FullName
+          Write-Host "`n=== 检查关键头文件 ==="
+          Test-Path third_party\ffmpeg\win64\include\libavcodec\avcodec.h
+          Test-Path third_party\ffmpeg\win64\include\libavcodec\avfft.h
           
       - name: 配置 FFmpeg 路径
         shell: pwsh
@@ -110,12 +116,27 @@ jobs:
           set -euo pipefail
           brew install ffmpeg
           FFMPEG_PREFIX=$(brew --prefix ffmpeg)
+          
+          echo "=== Homebrew FFmpeg 结构 ==="
+          echo "FFmpeg prefix: $FFMPEG_PREFIX"
+          echo -e "\n=== Include 目录 ==="
+          ls -la "$FFMPEG_PREFIX/include/" | head -20
+          echo -e "\n=== Lib 目录 ==="
+          ls -la "$FFMPEG_PREFIX/lib/" | grep -E "\.(dylib|a)$" | head -20
+          echo -e "\n=== 检查关键头文件 ==="
+          test -f "$FFMPEG_PREFIX/include/libavcodec/avcodec.h" && echo "✓ avcodec.h 存在" || echo "✗ avcodec.h 不存在"
+          test -f "$FFMPEG_PREFIX/include/libavcodec/avfft.h" && echo "✓ avfft.h 存在" || echo "✗ avfft.h 不存在"
+          
           mkdir -p third_party/ffmpeg/macos/include third_party/ffmpeg/macos/lib
           rsync -a "$FFMPEG_PREFIX/include/" third_party/ffmpeg/macos/include/
           for lib in libavcodec libavformat libavutil libswresample libswscale libavfilter libavdevice; do
             cp "$FFMPEG_PREFIX/lib/${lib}"*.dylib third_party/ffmpeg/macos/lib/ 2>/dev/null || true
           done
           chmod 755 third_party/ffmpeg/macos/lib/*.dylib
+          
+          echo -e "\n=== 复制后的目录结构 ==="
+          ls -la third_party/ffmpeg/macos/include/ | head -20
+          ls -la third_party/ffmpeg/macos/lib/
           file third_party/ffmpeg/macos/lib/libavcodec*.dylib | head -1
 
       - name: CMake Configure
@@ -152,12 +173,27 @@ jobs:
           set -euo pipefail
           brew install ffmpeg
           FFMPEG_PREFIX=$(brew --prefix ffmpeg)
+          
+          echo "=== Homebrew FFmpeg 结构 ==="
+          echo "FFmpeg prefix: $FFMPEG_PREFIX"
+          echo -e "\n=== Include 目录 ==="
+          ls -la "$FFMPEG_PREFIX/include/" | head -20
+          echo -e "\n=== Lib 目录 ==="
+          ls -la "$FFMPEG_PREFIX/lib/" | grep -E "\.(dylib|a)$" | head -20
+          echo -e "\n=== 检查关键头文件 ==="
+          test -f "$FFMPEG_PREFIX/include/libavcodec/avcodec.h" && echo "✓ avcodec.h 存在" || echo "✗ avcodec.h 不存在"
+          test -f "$FFMPEG_PREFIX/include/libavcodec/avfft.h" && echo "✓ avfft.h 存在" || echo "✗ avfft.h 不存在"
+          
           mkdir -p third_party/ffmpeg/macos/include third_party/ffmpeg/macos/lib
           rsync -a "$FFMPEG_PREFIX/include/" third_party/ffmpeg/macos/include/
           for lib in libavcodec libavformat libavutil libswresample libswscale libavfilter libavdevice; do
             cp "$FFMPEG_PREFIX/lib/${lib}"*.dylib third_party/ffmpeg/macos/lib/ 2>/dev/null || true
           done
           chmod 755 third_party/ffmpeg/macos/lib/*.dylib
+          
+          echo -e "\n=== 复制后的目录结构 ==="
+          ls -la third_party/ffmpeg/macos/include/ | head -20
+          ls -la third_party/ffmpeg/macos/lib/
           file third_party/ffmpeg/macos/lib/libavcodec*.dylib | head -1
 
       - name: CMake Configure
