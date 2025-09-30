@@ -7,6 +7,10 @@ set(chromaprint_VERSION "${chromaprint_VERSION_MAJOR}.${chromaprint_VERSION_MINO
 
 project(chromaprint LANGUAGES C CXX VERSION "${chromaprint_VERSION}")
 
+if(POLICY CMP0074)
+  cmake_policy(SET CMP0074 NEW)
+endif()
+
 set(_chromaprint_root "${CMAKE_CURRENT_SOURCE_DIR}")
 set(_chromaprint_default_ffmpeg_root "${_chromaprint_root}/third_party/ffmpeg")
 if(WIN32)
