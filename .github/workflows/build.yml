@@ -13,7 +13,6 @@ on:
 env:
   CHROMAPRINT_VERSION: 1.6.0
   RELEASE_SUFFIX: custom
-  FFMPEG_TAG: n6.1-latest
 
 jobs:
   build-windows:
@@ -26,10 +25,14 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $tag = "${{ env.FFMPEG_TAG }}"
-          $zipName = "ffmpeg-$tag-win64-lgpl-shared.zip"
-          $url = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/$zipName"
-          Invoke-WebRequest $url -OutFile $zipName
+          $headers = @{ "User-Agent" = "chromaprint-build" }
+          $release = Invoke-RestMethod -Uri "https://api.github.com/repos/BtbN/FFmpeg-Builds/releases/latest" -Headers $headers
+          $asset = $release.assets | Where-Object { $_.name -like "ffmpeg-*-win64-lgpl-shared.zip" } | Select-Object -First 1
+          if (-not $asset) {
+            throw "未在最新 Release 中找到 win64 LGPL shared 资源"
+          }
+          $zipName = $asset.name
+          Invoke-WebRequest $asset.browser_download_url -OutFile $zipName -Headers $headers
           Expand-Archive $zipName -DestinationPath ffmpeg-win64 -Force
           $pkgDir = Get-ChildItem ffmpeg-win64 -Directory | Select-Object -First 1
           if (-not $pkgDir) {
@@ -89,19 +92,60 @@ jobs:
       - name: 下载 FFmpeg SDK (macOS)
         run: |
           set -euo pipefail
-          TAG="${FFMPEG_TAG}"
-          ARM_ZIP="ffmpeg-${TAG}-macos11-arm64-lgpl-shared.zip"
-          X64_ZIP="ffmpeg-${TAG}-macos11-x86_64-lgpl-shared.zip"
-          curl -L -o "$ARM_ZIP" "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/$ARM_ZIP"
-          curl -L -o "$X64_ZIP" "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/$X64_ZIP"
-          unzip -q "$ARM_ZIP" -d ffmpeg-arm64
-          unzip -q "$X64_ZIP" -d ffmpeg-x86_64
-          ARM_DIR=$(find ffmpeg-arm64 -mindepth 1 -maxdepth 1 -type d | head -n 1)
-          X64_DIR=$(find ffmpeg-x86_64 -mindepth 1 -maxdepth 1 -type d | head -n 1)
-          if [ -z "$ARM_DIR" ] || [ -z "$X64_DIR" ]; then
-            echo "未找到 FFmpeg 解压目录" >&2
-            exit 1
-          fi
+          python3 <<'PY'
+import json
+import os
+import sys
+import urllib.request
+import zipfile
+
+UA = {"User-Agent": "chromaprint-build"}
+req = urllib.request.Request("https://api.github.com/repos/BtbN/FFmpeg-Builds/releases/latest", headers=UA)
+with urllib.request.urlopen(req) as resp:
+    release = json.load(resp)
+
+assets = {asset["name"]: asset["browser_download_url"] for asset in release.get("assets", [])}
+
+targets = {
+    "arm": "macos11-arm64-lgpl-shared.zip",
+    "x64": "macos11-x86_64-lgpl-shared.zip",
+}
+
+downloaded = {}
+for key, suffix in targets.items():
+    matches = [name for name in assets if name.endswith(suffix)]
+    if not matches:
+        print(f"未找到 {suffix} 资源", file=sys.stderr)
+        sys.exit(1)
+    name = matches[0]
+    url = assets[name]
+    print(f"下载 {name}")
+    with urllib.request.urlopen(urllib.request.Request(url, headers=UA)) as r, open(name, "wb") as f:
+        f.write(r.read())
+    downloaded[key] = name
+
+def extract(zip_name, target_dir):
+    with zipfile.ZipFile(zip_name) as z:
+        top_level = None
+        for m in z.namelist():
+            parts = m.split("/")
+            if len(parts) <= 1:
+                continue
+            top_level = parts[0]
+            break
+        if top_level is None:
+            raise RuntimeError(f"{zip_name} 缺少预期的顶层目录")
+        z.extractall(path=target_dir)
+        return os.path.join(target_dir, top_level)
+
+arm_dir = extract(downloaded["arm"], "ffmpeg-arm64")
+x64_dir = extract(downloaded["x64"], "ffmpeg-x86_64")
+
+with open("ffmpeg-dirs.txt", "w", encoding="utf-8") as f:
+    f.write(f"ARM_DIR={arm_dir}\n")
+    f.write(f"X64_DIR={x64_dir}\n")
+PY
+          source ffmpeg-dirs.txt
           mkdir -p third_party/ffmpeg/macos/include third_party/ffmpeg/macos/lib
           rsync -a "$ARM_DIR/include/" third_party/ffmpeg/macos/include/
           for lib in libavcodec libavformat libavutil libswresample libswscale; do
