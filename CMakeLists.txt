@@ -7,13 +7,29 @@ set(chromaprint_VERSION "${chromaprint_VERSION_MAJOR}.${chromaprint_VERSION_MINO
 
 project(chromaprint LANGUAGES C CXX VERSION "${chromaprint_VERSION}")
 
+set(_chromaprint_root "${CMAKE_CURRENT_SOURCE_DIR}")
+set(_chromaprint_default_ffmpeg_root "${_chromaprint_root}/third_party/ffmpeg")
+if(WIN32)
+  set(_chromaprint_default_ffmpeg_root "${_chromaprint_default_ffmpeg_root}/win64")
+elseif(APPLE)
+  set(_chromaprint_default_ffmpeg_root "${_chromaprint_default_ffmpeg_root}/macos")
+endif()
+
+if(NOT DEFINED FFMPEG_ROOT OR FFMPEG_ROOT STREQUAL "")
+  set(FFMPEG_ROOT "${_chromaprint_default_ffmpeg_root}" CACHE PATH "Location of FFMPEG")
+endif()
+
+if(NOT DEFINED ENV{FFMPEG_DIR} OR "$ENV{FFMPEG_DIR}" STREQUAL "")
+  set(ENV{FFMPEG_DIR} "${FFMPEG_ROOT}")
+endif()
+
 set(chromaprint_SOVERSION 1)
 
 set(AUDIO_PROCESSOR_LIB CACHE STRING "Library to use for audio processing")
 set_property(CACHE AUDIO_PROCESSOR_LIB PROPERTY STRINGS avresample swresample)
 
-set(FFT_LIB CACHE STRING "Library to use for FFT calculations")
-set_property(CACHE FFT_LIB PROPERTY STRINGS avtx avfft fftw3 fftw3f kissfft vdsp)
+set(FFT_LIB "ffmpeg" CACHE STRING "Library to use for FFT calculations")
+set_property(CACHE FFT_LIB PROPERTY STRINGS ffmpeg avtx avfft fftw3 fftw3f kissfft vdsp)
 
 option(USE_INTERNAL_AVRESAMPLE "Use internal copy of avresample from ffmpeg for input conversion" ON)
 
@@ -33,6 +49,13 @@ if(BUILD_SHARED_LIBS)
   set(CMAKE_C_VISIBILITY_PRESET hidden)
   set(CMAKE_CXX_VISIBILITY_PRESET hidden)
   set(CMAKE_VISIBILITY_INLINES_HIDDEN ON)
+endif()
+
+if(MSVC)
+  if(POLICY CMP0091)
+    cmake_policy(SET CMP0091 NEW)
+  endif()
+  set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
 
 if(CMAKE_COMPILER_IS_GNUCXX AND CMAKE_BUILD_TYPE STREQUAL "Debug")
@@ -56,6 +79,15 @@ add_definitions(
 if(APPLE)
   option(BUILD_FRAMEWORK "Build an OS X framework" OFF)
   set(FRAMEWORK_INSTALL_DIR "/Library/Frameworks" CACHE STRING "Directory to install frameworks to")
+endif()
+
+if(APPLE)
+  if(NOT CMAKE_OSX_ARCHITECTURES)
+    set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "Build architectures for macOS" FORCE)
+  endif()
+  if(NOT CMAKE_OSX_DEPLOYMENT_TARGET)
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS deployment target")
+  endif()
 endif()
 
 option(BUILD_TOOLS "Build command line tools" OFF)
@@ -131,7 +163,7 @@ elseif(FFT_LIB STREQUAL "avtx")
   else()
     message(FATAL_ERROR "Selected ${FFT_LIB} for FFT calculations, but the library is not found")
   endif()
-elseif(FFT_LIB STREQUAL "avfft")
+elseif(FFT_LIB STREQUAL "avfft" OR FFT_LIB STREQUAL "ffmpeg")
   if(FFMPEG_LIBAVCODEC_FFT_FOUND)
     set(USE_AVFFT ON)
   else()
