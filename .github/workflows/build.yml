@@ -13,6 +13,9 @@ on:
 env:
   CHROMAPRINT_VERSION: 1.6.0
   RELEASE_SUFFIX: custom
+  FFMPEG_CHANNEL: master-latest
+  FFMPEG_RELEASE_PATH: https://github.com/BtbN/FFmpeg-Builds/releases/latest/download
+  FFMPEG_VERSION: 6.1.1
 
 jobs:
   build-windows:
@@ -25,14 +28,11 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $headers = @{ "User-Agent" = "chromaprint-build" }
-          $release = Invoke-RestMethod -Uri "https://api.github.com/repos/BtbN/FFmpeg-Builds/releases/latest" -Headers $headers
-          $asset = $release.assets | Where-Object { $_.name -like "ffmpeg-*-win64-lgpl-shared.zip" } | Select-Object -First 1
-          if (-not $asset) {
-            throw "未在最新 Release 中找到 win64 LGPL shared 资源"
-          }
-          $zipName = $asset.name
-          Invoke-WebRequest $asset.browser_download_url -OutFile $zipName -Headers $headers
+          $channel = "${{ env.FFMPEG_CHANNEL }}"
+          $baseUrl = "${{ env.FFMPEG_RELEASE_PATH }}"
+          $zipName = "ffmpeg-$channel-win64-lgpl-shared.zip"
+          $url = "$baseUrl/$zipName"
+          Invoke-WebRequest $url -OutFile $zipName
           Expand-Archive $zipName -DestinationPath ffmpeg-win64 -Force
           $pkgDir = Get-ChildItem ffmpeg-win64 -Directory | Select-Object -First 1
           if (-not $pkgDir) {
@@ -89,67 +89,53 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: 下载 FFmpeg SDK (macOS)
+      - name: 准备构建依赖
         run: |
           set -euo pipefail
-          python3 <<'PY'
-import json
-import os
-import sys
-import urllib.request
-import zipfile
+          brew update
+          brew install nasm pkg-config
 
-UA = {"User-Agent": "chromaprint-build"}
-req = urllib.request.Request("https://api.github.com/repos/BtbN/FFmpeg-Builds/releases/latest", headers=UA)
-with urllib.request.urlopen(req) as resp:
-    release = json.load(resp)
+      - name: 构建 FFmpeg SDK (macOS Universal)
+        run: |
+          set -euo pipefail
+          VERSION="${FFMPEG_VERSION}"
+          SRC_TAR="ffmpeg-${VERSION}.tar.bz2"
+          curl -L -o "$SRC_TAR" "https://ffmpeg.org/releases/$SRC_TAR"
+          tar xf "$SRC_TAR"
+          SRC_DIR="ffmpeg-${VERSION}"
 
-assets = {asset["name"]: asset["browser_download_url"] for asset in release.get("assets", [])}
+          build_ffmpeg() {
+            ARCH="$1"
+            PREFIX="$2"
+            mkdir -p "build-$ARCH"
+            pushd "build-$ARCH"
+            "../$SRC_DIR/configure" \
+              --prefix="$PREFIX" \
+              --enable-shared \
+              --disable-static \
+              --disable-doc \
+              --disable-programs \
+              --target-os=darwin \
+              --arch="$ARCH" \
+              --cc="$(xcrun --find clang)" \
+              --extra-cflags="-arch $ARCH" \
+              --extra-ldflags="-arch $ARCH"
+            make -j$(sysctl -n hw.ncpu)
+            make install
+            popd
+          }
 
-targets = {
-    "arm": "macos11-arm64-lgpl-shared.zip",
-    "x64": "macos11-x86_64-lgpl-shared.zip",
-}
+          build_ffmpeg arm64 "$PWD/ffmpeg-install-arm64"
+          build_ffmpeg x86_64 "$PWD/ffmpeg-install-x86_64"
 
-downloaded = {}
-for key, suffix in targets.items():
-    matches = [name for name in assets if name.endswith(suffix)]
-    if not matches:
-        print(f"未找到 {suffix} 资源", file=sys.stderr)
-        sys.exit(1)
-    name = matches[0]
-    url = assets[name]
-    print(f"下载 {name}")
-    with urllib.request.urlopen(urllib.request.Request(url, headers=UA)) as r, open(name, "wb") as f:
-        f.write(r.read())
-    downloaded[key] = name
-
-def extract(zip_name, target_dir):
-    with zipfile.ZipFile(zip_name) as z:
-        top_level = None
-        for m in z.namelist():
-            parts = m.split("/")
-            if len(parts) <= 1:
-                continue
-            top_level = parts[0]
-            break
-        if top_level is None:
-            raise RuntimeError(f"{zip_name} 缺少预期的顶层目录")
-        z.extractall(path=target_dir)
-        return os.path.join(target_dir, top_level)
-
-arm_dir = extract(downloaded["arm"], "ffmpeg-arm64")
-x64_dir = extract(downloaded["x64"], "ffmpeg-x86_64")
-
-with open("ffmpeg-dirs.txt", "w", encoding="utf-8") as f:
-    f.write(f"ARM_DIR={arm_dir}\n")
-    f.write(f"X64_DIR={x64_dir}\n")
-PY
-          source ffmpeg-dirs.txt
           mkdir -p third_party/ffmpeg/macos/include third_party/ffmpeg/macos/lib
-          rsync -a "$ARM_DIR/include/" third_party/ffmpeg/macos/include/
+          rsync -a ffmpeg-install-arm64/include/ third_party/ffmpeg/macos/include/
+
           for lib in libavcodec libavformat libavutil libswresample libswscale; do
-            lipo -create "$ARM_DIR/lib/${lib}.dylib" "$X64_DIR/lib/${lib}.dylib" -output "third_party/ffmpeg/macos/lib/${lib}.dylib"
+            lipo -create \
+              "ffmpeg-install-arm64/lib/${lib}.dylib" \
+              "ffmpeg-install-x86_64/lib/${lib}.dylib" \
+              -output "third_party/ffmpeg/macos/lib/${lib}.dylib"
           done
           chmod 755 third_party/ffmpeg/macos/lib/*.dylib
 
